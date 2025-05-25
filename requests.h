@@ -37,14 +37,19 @@
 #include <stdarg.h>
 #include <errno.h>
 
-#if defined(__unix__) || (defined(__APPLE__) && defined(__MACH__))
+#if defined(__unix__) || (defined(__APPLE__) && defined(__MACH__)) || defined(__NDS__)
 
 #include <arpa/inet.h>
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <netdb.h>
 #include <unistd.h>
+
+#ifndef __NDS__
+
 #define closesocket(s) close(s)
+
+#endif
 
 #elif defined(WIN32_LEAN_AND_MEAN) || defined(_WIN32) || defined(WIN32)
 
@@ -81,7 +86,7 @@ typedef X509 TLS_CERT;
 
 #define LOGGER_SRCNAME "[requests.h]" 
 #define FUNC_LINE_FMT "%s():%d: "
-#define REQUESTS_RECV_BUFSIZE 1024 * 32 
+#define REQUESTS_RECV_BUFSIZE 256 * 32 
 #define STATIC_STRSIZE(str) (sizeof(str) - 1)
 #define MIN(x, y) ((x < y) ? x : y)
 #define OPTION(s, m) (s && (s)->m)
@@ -917,6 +922,36 @@ static void net_rd_close(struct netreader* rd) {
 
 static int connect_to_host(struct url* url) {
 	int socket_fd;
+
+#if defined(__NDS__)
+
+	struct hostent* he = gethostbyname(url->hostname);
+	if (!he || !he->h_addr_list[0]) {
+		error(FUNC_LINE_FMT "gethostbyname failed for '%s'\n", __func__, __LINE__, url->hostname);
+		return -1;
+	}
+
+	struct sockaddr_in socket_address = {0};
+	socket_address.sin_family = AF_INET;
+	socket_address.sin_port = htons(url->port);
+	memcpy(&socket_address.sin_addr, he->h_addr_list[0], he->h_length);
+
+	debug(FUNC_LINE_FMT "found host ip: '%s'\n", __func__, __LINE__, inet_ntoa(socket_address.sin_addr));
+
+	socket_fd = socket(AF_INET, SOCK_STREAM, 0);
+	if (socket_fd == -1) {
+		error(FUNC_LINE_FMT "socket() failed: %s\n", __func__, __LINE__, strerror(errno));
+		return -1;
+	}
+
+	if (connect(socket_fd, (struct sockaddr*)&socket_address, sizeof(socket_address)) == -1) {
+		error(FUNC_LINE_FMT "connect() failed: %s\n", __func__, __LINE__, strerror(errno));
+		closesocket(socket_fd);
+		return -1;
+	}
+
+#else
+
         struct addrinfo hints = {0};
         struct addrinfo *hostinfo, *conn;
 
@@ -952,6 +987,9 @@ static int connect_to_host(struct url* url) {
 				__func__, __LINE__, (url->protocol == HTTP) ? "http" : "https", url->hostname, url->port, url->route);
 		return -1;
         }
+
+#endif
+
 	return socket_fd;
 }
 
