@@ -593,9 +593,6 @@ TLS_CTX* requests_get_tls_context(void) {
 
 static TLS_CONN* tls_conn_new(void) {
 	SSL* ssl = SSL_new(g_tlslib_ctx);
-	if(ssl) {
-		SSL_set_verify(ssl, SSL_VERIFY_PEER, NULL);
-	}
 	return ssl;
 }
 
@@ -605,6 +602,10 @@ static void tls_conn_free(TLS_CONN* tls) {
 
 static void tls_set_fd(TLS_CONN* tls, struct netio* io) {
 	SSL_set_fd(tls, io->socket);
+}
+
+static void tls_configure_verify(TLS_CONN* tls) {
+	SSL_set_verify(tls, SSL_VERIFY_PEER, NULL);
 }
 
 static int tls_connect(TLS_CONN* tls) {
@@ -1012,6 +1013,7 @@ static bool connect_secure(struct netio* io, char* vfy_hostname, char* certfile,
 	tls_set_sni(io->ssl, vfy_hostname);
 	tls_set_fd(io->ssl, io);
 	if(tls_connect(io->ssl)) {
+		tls_configure_verify(io->ssl);
 		TLS_CERT* server_cert = tls_get_peer_certificate(io->ssl);
 		if(!server_cert) { 
 			error(FUNC_LINE_FMT "No certificate was provided by the server\n", __func__, __LINE__);
@@ -1180,7 +1182,7 @@ struct params* parse_query_string(char* str) {
 }
 
 struct url resolve_url(char* url_str) {
-  	struct url host_url = { .protocol = HTTP, .port = 80 };
+	struct url host_url = { .protocol = HTTP, .port = 80 };
 	if(!url_str) {
 		return (struct url){ 0 };
 	}
@@ -1490,10 +1492,11 @@ struct response* requests_perform(char* url, enum REQUEST_METHOD method, struct 
 	struct __sized_buf b = { 0 };
 	struct ostream buffer_stream = os_create_buf(&b);
 	struct response* r = NULL;
-	if((r = perform_request(url, method, &buffer_stream, options))) {
+	r = perform_request(url, method, &buffer_stream, options);
+	buffer_stream.close(&buffer_stream);
+       	if(r) {
 		r->body = b;
 	}
-	buffer_stream.close(&buffer_stream);
 	return r;
 }
 
