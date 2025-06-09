@@ -1144,6 +1144,11 @@ static char* parse_query_pair(struct params* p, char* pair) {
 	size_t name_size = 0;
 	size_t value_size = 0;
 	size_t param_idx = 0;
+
+	while(*pair == '&' || *pair == '?') {
+		pair++;
+	}
+
 	if(!(pair_end = strchr(pair, '&'))) {
 		pair_end = &pair[strlen(pair)];
 	}
@@ -1176,7 +1181,7 @@ struct params* parse_query_string(char* str) {
 	memset(params, 0, sizeof(*params));
 	char* pair_begin = str;
 	while(*pair_begin) {
-		pair_begin = parse_query_pair(params, pair_begin + 1);
+		pair_begin = parse_query_pair(params, pair_begin);
 	}
 	return params;
 }
@@ -1334,8 +1339,11 @@ static char* retrieve_raw_headers(struct netreader* rd) {
 			break;
 		}
 	}
-	buf = reallocate(buf, buf_idx, buf_idx + 1);
-	buf[buf_idx] = '\0';
+
+	if(buf) {
+		buf = reallocate(buf, buf_idx, buf_idx + 1);
+		buf[buf_idx] = '\0';
+	}
 	return buf;
 }
 
@@ -1391,12 +1399,10 @@ static uint64_t get_chunk_length(struct netreader* rd) {
 
 static struct response* retrieve_response(struct netreader* rd, struct ostream* outstream, requests_user_cb_t user_cb, void* user_data) {
 	char* raw_headers = retrieve_raw_headers(rd);
-	assert(raw_headers);
-	if(*raw_headers == '\0') {
-		free(raw_headers);
+	if(!raw_headers) {
 		return NULL;
 	}
-	uint64_t content_length = 0;
+
 	struct response* resp = alloc_response();
 	parse_headers(resp, raw_headers);
 	free(raw_headers);
@@ -1404,6 +1410,7 @@ static struct response* retrieve_response(struct netreader* rd, struct ostream* 
 		return resp;
 	}
 
+	uint64_t content_length = 0;
 	uint8_t transfer_mode = determine_transfer_mode(&resp->header, &content_length);
 
 	switch(transfer_mode) {
@@ -1411,6 +1418,7 @@ static struct response* retrieve_response(struct netreader* rd, struct ostream* 
 		recv_data_buffered(rd, outstream, content_length, resp->status_code, user_cb, user_data);
 		break;
 	}
+
 	case __TRANSFER_MODE_CHUNKED: {
 		char endbuf[3] = {0};
 		do {
@@ -1420,6 +1428,7 @@ static struct response* retrieve_response(struct netreader* rd, struct ostream* 
 		} while(content_length > 0);
 		break;
 	}
+
 	case __TRANSFER_MODE_NODATA:
 	default:
 		break;
@@ -1456,13 +1465,13 @@ static struct response* perform_request(char* url_str, enum REQUEST_METHOD metho
 	
 	if((conn_io.socket = connect_to_host(&host_url)) < 0) {
 		error(FUNC_LINE_FMT "Failed to create socket\n", __func__, __LINE__);
-		goto freeurl;
+		return NULL;
 	}
 #ifndef REQUESTS_NO_TLS
 	if(!OPTION(options, disable_ssl) && host_url.protocol == HTTPS) {
 		char* certfile = OPTION(options, cert) ? options->cert : NULL;
 		if(!connect_secure(&conn_io, host_url.hostname, certfile, OPTION(options, ignore_verification))) {
-			goto freeurl;
+			return NULL;
 		}
 	}
 #endif // #ifndef REQUESTS_NO_TLS
@@ -1476,15 +1485,11 @@ static struct response* perform_request(char* url_str, enum REQUEST_METHOD metho
 	if((resp = retrieve_response(&conn_reader, outstream, user_callback, callback_data))) {
 		resp->url = malloc(sizeof(*resp->url));
 		memset(resp->url, 0, sizeof(*resp->url));
-		*resp->url = clone_url(&host_url);
+		*resp->url = OPTION(options, url) ? clone_url(&host_url) : host_url;
 	}
 
 	net_rd_close(&conn_reader);
 
-freeurl:
-	if(!OPTION(options, url)) {
-		free_url(&host_url);
-	}
 	return resp;
 }
 
@@ -1494,7 +1499,7 @@ struct response* requests_perform(char* url, enum REQUEST_METHOD method, struct 
 	struct response* r = NULL;
 	r = perform_request(url, method, &buffer_stream, options);
 	buffer_stream.close(&buffer_stream);
-       	if(r) {
+	if(r) {
 		r->body = b;
 	}
 	return r;
